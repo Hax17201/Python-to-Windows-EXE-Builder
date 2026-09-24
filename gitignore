@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build output
+build/
+dist/
+*.spec
+.py2exe_builder/
+
+# Installer / packaging caches
+pip-wheel-metadata/
+*.egg-info/
+.eggs/
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local builder settings / temporary data
+py_to_exe_builder_settings.json
+nuitka-crash-report.xml
+
+# Sensitive local files
+.env
+.env.*
+*.pfx
+*.p12
+*.key
