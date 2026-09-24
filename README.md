@@ -1,3 +1,11 @@
+License
+
+This project is licensed under the MIT License.
+
+You are free to use, modify, distribute, and incorporate this project into personal or commercial projects, provided that the original copyright notice and MIT License are retained.
+
+Attribution to the original project and author is required under the terms of the MIT License.
+
 Python to Windows EXE Builder
 
 A Windows GUI for turning Python scripts and full Python projects into Windows executable files using PyInstaller or Nuitka.
@@ -366,11 +374,12 @@ Do not include passwords, private keys, API secrets, access tokens or other sens
 
 License
 
-Choose the repository license that matches how you want others to use the project.
+MIT License
 
-If you want a permissive open-source project that allows reuse and modification with attribution, the MIT License is a common choice.
+Copyright (c) 2026 Haxly Mark
 
-If you do not want to grant reuse or modification rights, do not add an open-source license until you have selected terms that match your intended distribution.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files
 
 Python to Windows EXE Builder v1.5.10
 Build Python applications for Windows with project detection, dependency handling, resource bundling, build diagnostics and optional security hardening.
