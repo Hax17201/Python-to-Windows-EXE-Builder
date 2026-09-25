@@ -1,0 +1,16 @@
+Python to Windows EXE Builder v1.5.11 - Authenticode patch validation
+
+Static validation performed:
+- Python source compiles successfully with python -m py_compile.
+- Release signing validation runs independently from anti-decompile security hardening.
+- Ordinary PyInstaller output reaches Authenticode signing when signing is enabled.
+- Existing secured/Nuitka output still reaches Authenticode signing.
+- PFX command generation validated: /fd SHA256 /f <pfx> /p <redacted> /tr <url> /td SHA256.
+- Windows certificate store auto-selection validated: /a with optional /sm.
+- Windows certificate store thumbprint selection validated: /sha1 <40 hex> with optional /sm.
+- Signature verification command validated: signtool verify /pa /all /v <exe>.
+- PFX password is not written to persisted settings.
+- RFC3161 timestamp requirement is enabled by default for new settings.
+
+Environment limitation:
+The patch was validated in a non-Windows build environment, so an actual certificate-backed Authenticode operation could not be executed here. Final signing should be smoke-tested on Windows with your real certificate/token and Windows SDK SignTool.

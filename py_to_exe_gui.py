@@ -21,7 +21,7 @@ A Tkinter front-end for PyInstaller with:
 - fail-closed production protection: selected security backend failure aborts the secured build
 - backend-aware post-build verification (native PE checks or PyArmor runtime verification)
 - optional PyArmor expiry and target-device binding anti-piracy controls
-- optional Authenticode signing and SHA-256 sidecar verification
+- independent release Authenticode signing (PFX or Windows certificate store) and SHA-256 sidecar verification
 - protected whole-project staging that never bundles raw .py source
 - likely-secret/private-key preflight for production builds
 - saved settings and live log
@@ -56,7 +56,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "Python → Windows EXE Builder"
-APP_VERSION = "1.5.10"
+APP_VERSION = "1.5.11"
 CONFIG_NAME = "py_to_exe_builder_settings.json"
 
 # Import name -> pip distribution name. This intentionally contains only
@@ -808,7 +808,13 @@ class BuilderApp(tk.Tk):
         self.security_strict_passwords_var = tk.BooleanVar(value=False)
         self.security_post_verify_var = tk.BooleanVar(value=True)
         self.security_hash_var = tk.BooleanVar(value=True)
+        # Release signing is intentionally independent from anti-decompile hardening.
+        # A normal PyInstaller build can and should still be Authenticode-signed.
         self.security_sign_var = tk.BooleanVar(value=False)
+        self.sign_source_var = tk.StringVar(value="PFX / P12 file")
+        self.sign_thumbprint_var = tk.StringVar()
+        self.sign_machine_store_var = tk.BooleanVar(value=False)
+        self.sign_require_timestamp_var = tk.BooleanVar(value=True)
         self.security_analysis_notice_var = tk.BooleanVar(value=False)
         self.security_analysis_notice_mode_var = tk.StringVar(value="Generated text")
         self.security_analysis_notice_file_var = tk.StringVar()
@@ -817,7 +823,7 @@ class BuilderApp(tk.Tk):
         self.signtool_var = tk.StringVar()
         self.sign_pfx_var = tk.StringVar()
         self.sign_password_var = tk.StringVar()
-        self.timestamp_url_var = tk.StringVar()
+        self.timestamp_url_var = tk.StringVar(value="http://timestamp.digicert.com")
         self.debug_var = tk.StringVar(value="none")
         self.optimize_var = tk.StringVar(value="0")
         self.upx_var = tk.StringVar()
@@ -857,17 +863,20 @@ class BuilderApp(tk.Tk):
         self.dep_tab = ttk.Frame(self.tabs, padding=12)
         self.advanced_tab = ttk.Frame(self.tabs, padding=12)
         self.security_tab = ttk.Frame(self.tabs, padding=12)
+        self.signing_tab = ttk.Frame(self.tabs, padding=12)
         self.log_tab = ttk.Frame(self.tabs, padding=8)
         self.tabs.add(self.build_tab, text="Build")
         self.tabs.add(self.dep_tab, text="Dependencies & Data")
         self.tabs.add(self.advanced_tab, text="Advanced")
         self.tabs.add(self.security_tab, text="Security")
+        self.tabs.add(self.signing_tab, text="Signing")
         self.tabs.add(self.log_tab, text="Build Log")
 
         self._build_main_tab()
         self._build_dep_tab()
         self._build_advanced_tab()
         self._build_security_tab()
+        self._build_signing_tab()
         self._build_log_tab()
 
         bottom = ttk.Frame(outer)
@@ -1171,28 +1180,11 @@ class BuilderApp(tk.Tk):
             foreground="#555",
         ).grid(row=1, column=2, sticky="w", padx=(8, 0), pady=4)
 
-        signing = ttk.LabelFrame(t, text="Authenticode signing / integrity", padding=10)
-        signing.grid(row=3, column=0, sticky="ew", pady=8)
-        signing.columnconfigure(1, weight=1)
-        ttk.Checkbutton(
-            signing,
-            text="Digitally sign the final EXE with a PFX certificate",
-            variable=self.security_sign_var,
-        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=3)
-        self._row_entry(signing, 1, "signtool.exe (optional if in PATH)", self.signtool_var, self.pick_signtool)
-        self._row_entry(signing, 2, "Code-signing certificate (.pfx/.p12)", self.sign_pfx_var, self.pick_sign_pfx)
-        ttk.Label(signing, text="PFX password").grid(row=3, column=0, sticky="w", padx=(0, 8), pady=5)
-        ttk.Entry(signing, textvariable=self.sign_password_var, show="•").grid(row=3, column=1, sticky="ew", pady=5)
-        ttk.Label(signing, text="Password is not saved in settings.", foreground="#555").grid(
-            row=3, column=2, sticky="w", padx=(8, 0), pady=5
-        )
-        ttk.Label(signing, text="RFC3161 timestamp URL (optional)").grid(row=4, column=0, sticky="w", padx=(0, 8), pady=5)
-        ttk.Entry(signing, textvariable=self.timestamp_url_var).grid(row=4, column=1, columnspan=2, sticky="ew", pady=5)
-        ttk.Checkbutton(
-            signing,
-            text="Write SHA-256 sidecar and security report after build",
-            variable=self.security_hash_var,
-        ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(
+            t,
+            text="Release Authenticode configuration has its own Signing tab and works independently of anti-decompile hardening.",
+            foreground="#176b2c",
+        ).grid(row=3, column=0, sticky="w", pady=(8, 0))
 
         ttk.Label(
             t,
@@ -1203,6 +1195,97 @@ class BuilderApp(tk.Tk):
             wraplength=1000,
             foreground="#8a4b00",
         ).grid(row=4, column=0, sticky="w", pady=(8, 0))
+
+    def _build_signing_tab(self):
+        t = self.signing_tab
+        t.columnconfigure(0, weight=1)
+
+        intro = ttk.LabelFrame(t, text="Windows release signing", padding=10)
+        intro.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        intro.columnconfigure(0, weight=1)
+        ttk.Checkbutton(
+            intro,
+            text="Sign the final EXE after every successful build",
+            variable=self.security_sign_var,
+        ).grid(row=0, column=0, sticky="w", pady=2)
+        ttk.Label(
+            intro,
+            text=(
+                "Independent of Security hardening. For public distribution, use a publicly trusted code-signing identity. "
+                "Self-signed certificates are for development or managed internal trust. Signing is fail-closed: a signing "
+                "or verification error fails the release build rather than silently shipping an unsigned EXE."
+            ),
+            wraplength=1000, foreground="#555",
+        ).grid(row=1, column=0, sticky="w", pady=(5, 0))
+
+        signing = ttk.LabelFrame(t, text="Certificate and SignTool", padding=10)
+        signing.grid(row=1, column=0, sticky="ew", pady=8)
+        signing.columnconfigure(1, weight=1)
+        self._row_entry(signing, 0, "signtool.exe (optional if in PATH)", self.signtool_var, self.pick_signtool)
+
+        ttk.Label(signing, text="Certificate source").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=5)
+        ttk.Combobox(
+            signing,
+            textvariable=self.sign_source_var,
+            values=[
+                "PFX / P12 file",
+                "Windows Certificate Store (auto)",
+                "Windows Certificate Store (thumbprint)",
+            ],
+            state="readonly", width=38,
+        ).grid(row=1, column=1, sticky="w", pady=5)
+        ttk.Label(
+            signing, text="Store modes support non-exportable or hardware-backed signing keys.", foreground="#555"
+        ).grid(row=1, column=2, sticky="w", padx=(8, 0), pady=5)
+
+        self._row_entry(signing, 2, "PFX / P12 certificate", self.sign_pfx_var, self.pick_sign_pfx)
+        ttk.Label(signing, text="PFX password").grid(row=3, column=0, sticky="w", padx=(0, 8), pady=5)
+        ttk.Entry(signing, textvariable=self.sign_password_var, show="•").grid(row=3, column=1, sticky="ew", pady=5)
+        ttk.Label(signing, text="Not saved in settings.", foreground="#555").grid(
+            row=3, column=2, sticky="w", padx=(8, 0), pady=5
+        )
+
+        ttk.Label(signing, text="Certificate thumbprint").grid(row=4, column=0, sticky="w", padx=(0, 8), pady=5)
+        ttk.Entry(signing, textvariable=self.sign_thumbprint_var).grid(row=4, column=1, sticky="ew", pady=5)
+        ttk.Label(
+            signing,
+            text="For thumbprint mode only. The SHA-1 value identifies the certificate; the EXE signature uses SHA-256.",
+            foreground="#555",
+        ).grid(row=4, column=2, sticky="w", padx=(8, 0), pady=5)
+        ttk.Checkbutton(
+            signing, text="Use Local Machine certificate store (/sm)", variable=self.sign_machine_store_var
+        ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(2, 4))
+
+        timestamp = ttk.LabelFrame(t, text="Timestamp and verification", padding=10)
+        timestamp.grid(row=2, column=0, sticky="ew", pady=8)
+        timestamp.columnconfigure(1, weight=1)
+        ttk.Label(timestamp, text="RFC3161 timestamp URL").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=5)
+        ttk.Entry(timestamp, textvariable=self.timestamp_url_var).grid(row=0, column=1, sticky="ew", pady=5)
+        ttk.Checkbutton(
+            timestamp, text="Require timestamp", variable=self.sign_require_timestamp_var
+        ).grid(row=0, column=2, sticky="w", padx=(8, 0), pady=5)
+        ttk.Label(
+            timestamp,
+            text=(
+                "Default: DigiCert RFC3161. You can replace it with your CA's timestamp service. "
+                "The builder signs with SHA-256, timestamps with SHA-256, then runs SignTool verify /pa /all /v."
+            ),
+            wraplength=950, foreground="#555",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 5))
+        ttk.Checkbutton(
+            timestamp,
+            text="Write SHA-256 sidecar and security report after protected/signed builds",
+            variable=self.security_hash_var,
+        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
+        ttk.Label(
+            t,
+            text=(
+                "SmartScreen note: signing does not guarantee an immediate warning-free first download. Use the same trusted "
+                "publisher identity consistently across releases so publisher reputation can accumulate over time."
+            ),
+            wraplength=1000, foreground="#8a4b00",
+        ).grid(row=3, column=0, sticky="w", pady=(8, 0))
 
     def configure_analysis_notice(self):
         win = tk.Toplevel(self)
@@ -2763,6 +2846,7 @@ Get-CimInstance Win32_Process | ForEach-Object {
         self._run_thread(work, "Preparing dependencies…")
 
     def _validate_security_inputs(self):
+        self._validate_signing_inputs()
         if not self.security_var.get():
             return
         engine = self.security_engine_var.get().strip()
@@ -2805,10 +2889,6 @@ Get-CimInstance Win32_Process | ForEach-Object {
                 if not (self.security_analysis_notice_text_var.get() or "").strip():
                     raise ValueError("Reverse-engineering notice is enabled, but the generated notice text is empty.")
             self._safe_analysis_notice_name(self.security_analysis_notice_name_var.get())
-        if self.security_sign_var.get():
-            pfx = Path(self.sign_pfx_var.get().strip()).expanduser()
-            if not pfx.is_file():
-                raise ValueError("Authenticode signing is enabled but the PFX/P12 certificate file was not found.")
         for entry in self.data_entries:
             source = Path(entry.source).expanduser()
             if source.is_file() and source.suffix.lower() in {".py", ".pyw", ".pyc", ".pyo"}:
@@ -2826,6 +2906,46 @@ Get-CimInstance Win32_Process | ForEach-Object {
                         "Security hardening cannot bundle a manual data folder containing raw Python source/bytecode: "
                         f"{leaked}. Put the code inside the selected project so it can be compiled/protected."
                     )
+
+    def _validate_signing_inputs(self):
+        if not self.security_sign_var.get():
+            return
+        if not is_windows():
+            raise ValueError("Authenticode signing requires Windows and Microsoft SignTool.")
+
+        source = self.sign_source_var.get().strip() or "PFX / P12 file"
+        valid_sources = {
+            "PFX / P12 file",
+            "Windows Certificate Store (auto)",
+            "Windows Certificate Store (thumbprint)",
+        }
+        if source not in valid_sources:
+            raise ValueError("Select a valid Authenticode certificate source.")
+
+        if source == "PFX / P12 file":
+            raw = self.sign_pfx_var.get().strip()
+            if not raw:
+                raise ValueError("Authenticode signing is enabled but no PFX/P12 certificate was selected.")
+            pfx = Path(raw).expanduser()
+            if not pfx.is_file():
+                raise ValueError("Authenticode signing is enabled but the PFX/P12 certificate file was not found.")
+        elif source == "Windows Certificate Store (thumbprint)":
+            thumbprint = re.sub(r"[^0-9A-Fa-f]", "", self.sign_thumbprint_var.get())
+            if len(thumbprint) != 40:
+                raise ValueError(
+                    "Certificate-store thumbprint mode requires a 40-hex-character SHA-1 certificate thumbprint."
+                )
+
+        timestamp = self.timestamp_url_var.get().strip()
+        if self.sign_require_timestamp_var.get() and not timestamp:
+            raise ValueError(
+                "Release signing is configured to require an RFC3161 timestamp. Enter your CA timestamp URL."
+            )
+        if timestamp and not re.match(r"^https?://", timestamp, flags=re.I):
+            raise ValueError("RFC3161 timestamp URL must start with http:// or https://.")
+
+        # Resolve now so the build fails before doing expensive compilation work.
+        self._resolve_signtool()
 
     @staticmethod
     def _copy_tree_overlay(source: Path, destination: Path) -> tuple[int, int]:
@@ -3689,19 +3809,45 @@ Get-CimInstance Win32_Process | ForEach-Object {
 
     def _sign_executable(self, exe: Path):
         signtool = self._resolve_signtool()
-        pfx = Path(self.sign_pfx_var.get().strip()).expanduser().resolve()
+        source = self.sign_source_var.get().strip() or "PFX / P12 file"
         password = self.sign_password_var.get()
-        cmd = [str(signtool), "sign", "/fd", "SHA256", "/f", str(pfx)]
-        if password:
-            cmd.extend(["/p", password])
+        cmd = [str(signtool), "sign", "/fd", "SHA256"]
+
+        if source == "PFX / P12 file":
+            pfx = Path(self.sign_pfx_var.get().strip()).expanduser().resolve()
+            cmd.extend(["/f", str(pfx)])
+            if password:
+                cmd.extend(["/p", password])
+        elif source == "Windows Certificate Store (auto)":
+            if self.sign_machine_store_var.get():
+                cmd.append("/sm")
+            cmd.append("/a")
+        elif source == "Windows Certificate Store (thumbprint)":
+            if self.sign_machine_store_var.get():
+                cmd.append("/sm")
+            thumbprint = re.sub(r"[^0-9A-Fa-f]", "", self.sign_thumbprint_var.get()).upper()
+            cmd.extend(["/sha1", thumbprint])
+        else:
+            raise RuntimeError(f"Unsupported Authenticode certificate source: {source}")
+
+        description = self.name_var.get().strip()
+        if description:
+            cmd.extend(["/d", description])
+
         timestamp = self.timestamp_url_var.get().strip()
         if timestamp:
             cmd.extend(["/tr", timestamp, "/td", "SHA256"])
+        elif self.sign_require_timestamp_var.get():
+            raise RuntimeError("RFC3161 timestamp is required but no timestamp URL is configured.")
+
         cmd.append(str(exe))
-        self._log("\n=== SECURITY: AUTHENTICODE SIGNING ===\n", "good")
+        self._log("\n=== RELEASE: AUTHENTICODE SIGNING ===\n", "good")
+        self._log(f"Certificate source: {source}\n")
+        if timestamp:
+            self._log(f"RFC3161 timestamp: {timestamp}\n")
         self._run_cmd(cmd, cwd=exe.parent, redact_values={password} if password else None)
-        self._run_cmd([str(signtool), "verify", "/pa", "/v", str(exe)], cwd=exe.parent)
-        self._log("Authenticode signing completed and signature verification passed.\n", "good")
+        self._run_cmd([str(signtool), "verify", "/pa", "/all", "/v", str(exe)], cwd=exe.parent)
+        self._log("Authenticode signing completed and Windows policy verification passed.\n", "good")
 
     def _write_security_artifacts(self, exe: Path, protection_backend: str):
         digest = hashlib.sha256(exe.read_bytes()).hexdigest()
@@ -3734,6 +3880,9 @@ Get-CimInstance Win32_Process | ForEach-Object {
                 f"Expiry restriction: {self.security_expiry_var.get().strip() or 'None'}",
                 f"Target-device binding: {'Enabled' if self.security_device_var.get().strip() else 'None'}",
                 f"Authenticode requested: {'Yes' if self.security_sign_var.get() else 'No'}",
+                f"Authenticode certificate source: {self.sign_source_var.get() if self.security_sign_var.get() else 'None'}",
+                f"RFC3161 timestamp required: {'Yes' if self.sign_require_timestamp_var.get() and self.security_sign_var.get() else 'No'}",
+                f"RFC3161 timestamp URL: {self.timestamp_url_var.get().strip() if self.security_sign_var.get() else 'None'}",
                 f"Analysis notice bundled: {'Yes' if self.security_analysis_notice_var.get() else 'No'}",
                 f"Analysis notice mode: {self.security_analysis_notice_mode_var.get() if self.security_analysis_notice_var.get() else 'None'}",
                 f"Analysis notice filename: {self._safe_analysis_notice_name(self.security_analysis_notice_name_var.get()) if self.security_analysis_notice_var.get() else 'None'}",
@@ -4104,10 +4253,15 @@ Get-CimInstance Win32_Process | ForEach-Object {
                     )
                 else:
                     self._verify_final_exe_security(env_py, exe, protection_backend)
-                if self.security_sign_var.get():
-                    self._sign_executable(exe)
-                if self.security_hash_var.get():
-                    self._write_security_artifacts(exe, protection_backend)
+
+            # Authenticode is a release/distribution control, not an anti-decompile
+            # feature. Sign every successful final EXE whenever requested, including
+            # ordinary PyInstaller builds with security hardening disabled.
+            if exe.exists() and self.security_sign_var.get():
+                self._sign_executable(exe)
+
+            if exe.exists() and self.security_hash_var.get() and (self.security_var.get() or self.security_sign_var.get()):
+                self._write_security_artifacts(exe, protection_backend)
 
             if self.open_output_var.get():
                 self.after(0, lambda: self._open_path(output))
@@ -4176,6 +4330,10 @@ Get-CimInstance Win32_Process | ForEach-Object {
             "security_post_verify": self.security_post_verify_var.get(),
             "security_hash": self.security_hash_var.get(),
             "security_sign": self.security_sign_var.get(),
+            "sign_source": self.sign_source_var.get(),
+            "sign_thumbprint": self.sign_thumbprint_var.get(),
+            "sign_machine_store": self.sign_machine_store_var.get(),
+            "sign_require_timestamp": self.sign_require_timestamp_var.get(),
             "security_analysis_notice": self.security_analysis_notice_var.get(),
             "security_analysis_notice_mode": self.security_analysis_notice_mode_var.get(),
             "security_analysis_notice_file": self.security_analysis_notice_file_var.get(),
@@ -4247,6 +4405,10 @@ Get-CimInstance Win32_Process | ForEach-Object {
             "security_post_verify": self.security_post_verify_var,
             "security_hash": self.security_hash_var,
             "security_sign": self.security_sign_var,
+            "sign_source": self.sign_source_var,
+            "sign_thumbprint": self.sign_thumbprint_var,
+            "sign_machine_store": self.sign_machine_store_var,
+            "sign_require_timestamp": self.sign_require_timestamp_var,
             "security_analysis_notice": self.security_analysis_notice_var,
             "security_analysis_notice_mode": self.security_analysis_notice_mode_var,
             "security_analysis_notice_file": self.security_analysis_notice_file_var,

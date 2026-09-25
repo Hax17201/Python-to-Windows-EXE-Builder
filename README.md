@@ -1,16 +1,8 @@
-License
-
-This project is licensed under the MIT License.
-
-You are free to use, modify, distribute, and incorporate this project into personal or commercial projects, provided that the original copyright notice and MIT License are retained.
-
-Attribution to the original project and author is required under the terms of the MIT License.
-
 Python to Windows EXE Builder
 
 A Windows GUI for turning Python scripts and full Python projects into Windows executable files using PyInstaller or Nuitka.
 
-Version 1.5.10 includes a Windows long-command fix for large whole-project builds, preventing WinError 206 by packaging the clean runtime staging directory with a shorter PyInstaller command.
+Version 1.5.11 adds release-grade Authenticode signing that works for ordinary PyInstaller builds as well as protected builds. It supports PFX/P12 files and Windows Certificate Store identities, requires/verifies RFC3161 timestamping by default, and fails the release if signing verification fails. It also retains the v1.5.10 Windows long-command fix.
 
 Features
 
@@ -64,7 +56,7 @@ Nuitka Native security/build backend
 
 Optional PyArmor + PyInstaller backend
 
-Optional Authenticode signing
+Optional release Authenticode signing (PFX/P12 or Windows Certificate Store)
 
 SHA-256 integrity output and build verification
 
@@ -72,9 +64,25 @@ Sensitive-secret/private-key preflight for protected builds
 
 Optional expiry/device-binding controls when supported by the selected security backend
 
-What's New in v1.5.10
+What's New in v1.5.11
 
-Windows Long Command Fix
+Release Authenticode Signing Fix
+
+Previously, Authenticode signing was coupled to anti-decompile security hardening, so a normal PyInstaller build could remain unsigned even when signing was selected. v1.5.11 makes signing independent and runs it after every successful final EXE build when enabled.
+
+Signing sources:
+
+PFX / P12 certificate file
+
+Windows Certificate Store automatic selection
+
+Windows Certificate Store selection by certificate thumbprint
+
+The builder uses SHA-256 file digests, RFC3161 timestamps, and SignTool verification. The default timestamp URL is DigiCert's public RFC3161 endpoint and can be changed to the service supplied by your certificate authority.
+
+A publicly trusted code-signing certificate is still required for public distribution; the builder cannot create publisher reputation with a self-signed certificate.
+
+Retained from v1.5.10 — Windows Long Command Fix
 
 Large whole-project PyInstaller builds could fail before PyInstaller started with:
 
@@ -251,7 +259,7 @@ Nuitka Native — free native compilation option
 
 PyArmor + PyInstaller — optional licensed protection workflow
 
-Authenticode signing
+Authenticode release signing (independent of source-protection mode)
 
 SHA-256 verification
 
@@ -262,6 +270,27 @@ Expiry/device binding when supported
 Start with a compatible or balanced configuration and test the finished application before using stronger settings.
 
 No client-side executable can be made completely impossible to reverse engineer. Security features should be treated as layers of protection, not absolute guarantees.
+
+
+How to Enable Authenticode Release Signing
+
+Open the Signing tab.
+
+Enable: Sign the final EXE after every successful build.
+
+Choose one certificate source:
+
+PFX / P12 file — select your certificate file and enter its password for the current session.
+
+Windows Certificate Store (auto) — lets SignTool automatically choose a usable code-signing certificate from the selected Windows certificate store.
+
+Windows Certificate Store (thumbprint) — enter the 40-hex-character certificate SHA-1 thumbprint when you want to select one exact certificate. This SHA-1 value is only the certificate identifier; the executable signature itself uses SHA-256.
+
+Leave Require timestamp enabled for public releases. The default RFC3161 service is http://timestamp.digicert.com, or replace it with the timestamp endpoint supplied by your certificate authority.
+
+Build normally. After PyInstaller or Nuitka succeeds, the builder signs the final EXE and runs SignTool verification. If signing or verification fails, the build is treated as failed instead of silently distributing an unsigned release.
+
+The PFX password is not saved to the builder settings file.
 
 14. Build the EXE
 
@@ -337,7 +366,7 @@ Always test the generated application before distributing it.
 
 Never embed production API keys, private keys, tokens or sensitive credentials directly in a client-side executable when they can be stored securely on a server instead.
 
-Authenticode signing requires your own valid code-signing certificate and compatible signing tools.
+Authenticode signing requires your own valid code-signing certificate and Microsoft SignTool. For public distribution, use a certificate/identity that chains to a Windows-trusted root; self-signed certificates are for development or managed internal environments. Timestamp every public release and keep the same publisher identity across releases when possible.
 
 Some Nuitka or PyArmor features may require additional compilers, tools, packages or licenses.
 
@@ -374,12 +403,11 @@ Do not include passwords, private keys, API secrets, access tokens or other sens
 
 License
 
-MIT License
+Choose the repository license that matches how you want others to use the project.
 
-Copyright (c) 2026 Haxly Mark
+If you want a permissive open-source project that allows reuse and modification with attribution, the MIT License is a common choice.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files
+If you do not want to grant reuse or modification rights, do not add an open-source license until you have selected terms that match your intended distribution.
 
-Python to Windows EXE Builder v1.5.10
+Python to Windows EXE Builder v1.5.11
 Build Python applications for Windows with project detection, dependency handling, resource bundling, build diagnostics and optional security hardening.

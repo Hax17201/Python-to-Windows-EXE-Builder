@@ -1,0 +1,15 @@
+Python to Windows EXE Builder v1.5.11
+
+- FIX: Authenticode signing no longer depends on anti-decompile/security hardening.
+- Sign the final EXE after every successful ordinary or protected build when enabled.
+- Added PFX/P12 signing source.
+- Added Windows Certificate Store auto-selection (/a).
+- Added Windows Certificate Store thumbprint selection (/sha1).
+- Added optional Local Machine store selection (/sm).
+- Added required RFC3161 timestamp option, enabled by default.
+- Default RFC3161 URL: http://timestamp.digicert.com (user-editable).
+- Uses SHA-256 for file digest and timestamp digest.
+- Verifies final signature using SignTool verify /pa /all /v.
+- Signing is fail-closed: build reports failure when signing/verification fails.
+- PFX password remains runtime-only and is not persisted to settings.
+- Retains v1.5.10 long-command fix.
