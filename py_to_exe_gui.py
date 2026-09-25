@@ -21,7 +21,7 @@ A Tkinter front-end for PyInstaller with:
 - fail-closed production protection: selected security backend failure aborts the secured build
 - backend-aware post-build verification (native PE checks or PyArmor runtime verification)
 - optional PyArmor expiry and target-device binding anti-piracy controls
-- independent release Authenticode signing (PFX or Windows certificate store) and SHA-256 sidecar verification
+- independent release Authenticode signing (PFX or Windows certificate store), automatic local self-signed dev certificate setup/trust, and SHA-256 sidecar verification
 - protected whole-project staging that never bundles raw .py source
 - likely-secret/private-key preflight for production builds
 - saved settings and live log
@@ -56,7 +56,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "Python → Windows EXE Builder"
-APP_VERSION = "1.5.11"
+APP_VERSION = "1.5.12"
 CONFIG_NAME = "py_to_exe_builder_settings.json"
 
 # Import name -> pip distribution name. This intentionally contains only
@@ -752,6 +752,11 @@ class BuilderApp(tk.Tk):
         self.status_var.trace_add("write", self._on_venv_status_changed)
         self.bind("<Configure>", self._on_window_configure, add="+")
         self.after_idle(self._refresh_compact_ui)
+        if is_windows():
+            # Detection is read-only: it never creates/trusts a certificate merely
+            # because the builder was opened. Provisioning happens only when the
+            # user enables release signing and starts a build.
+            self.after(350, self._auto_detect_signing_defaults)
         self.after(100, self._drain_log_queue)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -811,10 +816,15 @@ class BuilderApp(tk.Tk):
         # Release signing is intentionally independent from anti-decompile hardening.
         # A normal PyInstaller build can and should still be Authenticode-signed.
         self.security_sign_var = tk.BooleanVar(value=False)
-        self.sign_source_var = tk.StringVar(value="PFX / P12 file")
+        # Easy development-signing defaults. This never provides public CA trust; it
+        # only automates a Current User self-signed certificate for local/testing use.
+        self.sign_source_var = tk.StringVar(value="Windows Certificate Store (thumbprint)")
         self.sign_thumbprint_var = tk.StringVar()
         self.sign_machine_store_var = tk.BooleanVar(value=False)
         self.sign_require_timestamp_var = tk.BooleanVar(value=True)
+        self.sign_auto_local_var = tk.BooleanVar(value=True)
+        self.sign_local_subject_var = tk.StringVar(value="Haxly Software")
+        self.signing_status_var = tk.StringVar(value="Signing setup not checked yet")
         self.security_analysis_notice_var = tk.BooleanVar(value=False)
         self.security_analysis_notice_mode_var = tk.StringVar(value="Generated text")
         self.security_analysis_notice_file_var = tk.StringVar()
@@ -1218,8 +1228,41 @@ class BuilderApp(tk.Tk):
             wraplength=1000, foreground="#555",
         ).grid(row=1, column=0, sticky="w", pady=(5, 0))
 
+        easy = ttk.LabelFrame(t, text="Easy local development signing", padding=10)
+        easy.grid(row=1, column=0, sticky="ew", pady=8)
+        easy.columnconfigure(1, weight=1)
+        ttk.Checkbutton(
+            easy,
+            text=(
+                "Automatically create/reuse and trust a local self-signed Code Signing certificate "
+                "when needed (Current User, RSA-3072, SHA-256, 3 years)"
+            ),
+            variable=self.sign_auto_local_var,
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 5))
+        ttk.Label(easy, text="Local publisher name").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=5)
+        ttk.Entry(easy, textvariable=self.sign_local_subject_var).grid(row=1, column=1, sticky="ew", pady=5)
+        ttk.Button(easy, text="Detect / Apply Defaults", command=lambda: self._auto_detect_signing_defaults(True)).grid(
+            row=1, column=2, sticky="e", padx=(8, 0), pady=5
+        )
+        ttk.Label(
+            easy,
+            textvariable=self.signing_status_var,
+            wraplength=960,
+            foreground="#355070",
+        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(3, 2))
+        ttk.Label(
+            easy,
+            text=(
+                "Local-only trust: this installs the self-signed certificate into your Current User Trusted Root store so "
+                "SignTool /pa verification passes on this Windows account. Other PCs will NOT automatically trust it and "
+                "it does not create public SmartScreen publisher reputation."
+            ),
+            wraplength=1000,
+            foreground="#8a4b00",
+        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(3, 0))
+
         signing = ttk.LabelFrame(t, text="Certificate and SignTool", padding=10)
-        signing.grid(row=1, column=0, sticky="ew", pady=8)
+        signing.grid(row=2, column=0, sticky="ew", pady=8)
         signing.columnconfigure(1, weight=1)
         self._row_entry(signing, 0, "signtool.exe (optional if in PATH)", self.signtool_var, self.pick_signtool)
 
@@ -1257,7 +1300,7 @@ class BuilderApp(tk.Tk):
         ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(2, 4))
 
         timestamp = ttk.LabelFrame(t, text="Timestamp and verification", padding=10)
-        timestamp.grid(row=2, column=0, sticky="ew", pady=8)
+        timestamp.grid(row=3, column=0, sticky="ew", pady=8)
         timestamp.columnconfigure(1, weight=1)
         ttk.Label(timestamp, text="RFC3161 timestamp URL").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=5)
         ttk.Entry(timestamp, textvariable=self.timestamp_url_var).grid(row=0, column=1, sticky="ew", pady=5)
@@ -1285,7 +1328,7 @@ class BuilderApp(tk.Tk):
                 "publisher identity consistently across releases so publisher reputation can accumulate over time."
             ),
             wraplength=1000, foreground="#8a4b00",
-        ).grid(row=3, column=0, sticky="w", pady=(8, 0))
+        ).grid(row=4, column=0, sticky="w", pady=(8, 0))
 
     def configure_analysis_notice(self):
         win = tk.Toplevel(self)
@@ -2907,13 +2950,316 @@ Get-CimInstance Win32_Process | ForEach-Object {
                         f"{leaked}. Put the code inside the selected project so it can be compiled/protected."
                     )
 
+    @staticmethod
+    def _normalize_thumbprint(value: str) -> str:
+        return re.sub(r"[^0-9A-Fa-f]", "", value or "").upper()
+
+    @staticmethod
+    def _normalized_subject_dn(subject_name: str) -> str:
+        name = (subject_name or "").strip() or "Haxly Software"
+        return name if name.upper().startswith("CN=") else f"CN={name}"
+
+    def _find_signtool_quiet(self) -> Path | None:
+        raw = self.signtool_var.get().strip()
+        if raw:
+            p = Path(raw).expanduser()
+            if p.is_file():
+                return p.resolve()
+        found = shutil.which("signtool.exe") or shutil.which("signtool")
+        if found:
+            return Path(found).resolve()
+        if is_windows():
+            kits = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Windows Kits" / "10" / "bin"
+            if kits.is_dir():
+                candidates = sorted(kits.glob("*/x64/signtool.exe"), reverse=True)
+                if candidates:
+                    return candidates[0].resolve()
+        return None
+
+    def _run_powershell_text(self, script: str) -> str:
+        if not is_windows():
+            raise RuntimeError("Windows PowerShell is required for certificate-store automation.")
+        powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+        if not powershell:
+            raise RuntimeError("Windows PowerShell was not found.")
+        prefix = (
+            "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; "
+            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+            "$OutputEncoding=[System.Text.Encoding]::UTF8; "
+        )
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        result = subprocess.run(
+            [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", prefix + script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            startupinfo=startupinfo,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
+        output = (result.stdout or "").strip()
+        if result.returncode != 0:
+            raise RuntimeError(output or f"PowerShell certificate command failed with exit code {result.returncode}.")
+        return output
+
+    def _query_code_signing_certificates(self) -> list[dict]:
+        if not is_windows():
+            return []
+        script = r'''
+$rootThumbprints = @{}
+Get-ChildItem Cert:\CurrentUser\Root | ForEach-Object { $rootThumbprints[$_.Thumbprint.ToUpperInvariant()] = $true }
+$items = @(
+    Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+        Where-Object { $_.HasPrivateKey -and $_.NotAfter -gt (Get-Date) } |
+        Sort-Object NotAfter -Descending |
+        ForEach-Object {
+            [PSCustomObject]@{
+                Subject       = $_.Subject
+                Issuer        = $_.Issuer
+                Thumbprint    = $_.Thumbprint.ToUpperInvariant()
+                HasPrivateKey = [bool]$_.HasPrivateKey
+                NotAfter      = $_.NotAfter.ToString('o')
+                IsSelfSigned  = [bool]($_.Subject -eq $_.Issuer)
+                Trusted       = [bool]$rootThumbprints.ContainsKey($_.Thumbprint.ToUpperInvariant())
+            }
+        }
+)
+ConvertTo-Json -InputObject $items -Compress -Depth 4
+'''
+        output = self._run_powershell_text(script)
+        if not output:
+            return []
+        candidates = [line.strip() for line in output.splitlines() if line.strip()]
+        raw = candidates[-1] if candidates else "[]"
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return [data]
+        return list(data or [])
+
+    def _pick_detected_signing_certificate(self, certs: list[dict]) -> dict | None:
+        if not certs:
+            return None
+        requested = self._normalize_thumbprint(self.sign_thumbprint_var.get())
+        if requested:
+            for cert in certs:
+                if self._normalize_thumbprint(str(cert.get("Thumbprint", ""))) == requested:
+                    return cert
+        wanted_subject = self._normalized_subject_dn(self.sign_local_subject_var.get()).casefold()
+        for cert in certs:
+            if str(cert.get("Subject", "")).strip().casefold() == wanted_subject:
+                return cert
+        if len(certs) == 1:
+            return certs[0]
+        return None
+
+    def _auto_detect_signing_defaults(self, show_message: bool = False):
+        if not is_windows():
+            return
+        try:
+            if not self.timestamp_url_var.get().strip():
+                self.timestamp_url_var.set("http://timestamp.digicert.com")
+            self.sign_require_timestamp_var.set(True)
+
+            tool = self._find_signtool_quiet()
+            current_tool = self.signtool_var.get().strip()
+            if tool and (not current_tool or not Path(current_tool).is_file()):
+                self.signtool_var.set(str(tool))
+
+            # Preserve a deliberately configured, existing PFX/P12 identity.
+            # Automatic detection is the fallback/default, not an override for a
+            # real certificate the user has explicitly selected.
+            configured_pfx = self.sign_pfx_var.get().strip()
+            if self.sign_source_var.get().strip() == "PFX / P12 file" and configured_pfx and Path(configured_pfx).expanduser().is_file():
+                self.signing_status_var.set("Configured PFX/P12 certificate is ready. Timestamp defaults applied.")
+                if tool is None:
+                    self.signing_status_var.set(self.signing_status_var.get() + " SignTool was not detected.")
+                if show_message:
+                    messagebox.showinfo(APP_TITLE, self.signing_status_var.get())
+                return
+
+            certs = self._query_code_signing_certificates()
+            selected = self._pick_detected_signing_certificate(certs)
+            if selected:
+                thumb = self._normalize_thumbprint(str(selected.get("Thumbprint", "")))
+                self.sign_source_var.set("Windows Certificate Store (thumbprint)")
+                self.sign_thumbprint_var.set(thumb)
+                trusted = bool(selected.get("Trusted"))
+                trust_text = "trusted for this user" if trusted else "not yet trusted for this user"
+                self.signing_status_var.set(
+                    f"Detected {selected.get('Subject', 'code-signing certificate')} · {thumb} · {trust_text}."
+                )
+            elif certs:
+                self.signing_status_var.set(
+                    f"Detected {len(certs)} usable code-signing certificates. Keep Store (auto) or choose a thumbprint."
+                )
+            else:
+                self.signing_status_var.set(
+                    "No usable Current User code-signing certificate detected. With automatic local signing enabled, "
+                    "one will be created and trusted when you start a signed build."
+                )
+
+            if tool is None:
+                self.signing_status_var.set(self.signing_status_var.get() + " SignTool was not detected.")
+
+            if show_message:
+                messagebox.showinfo(APP_TITLE, self.signing_status_var.get())
+        except Exception as exc:
+            self.signing_status_var.set(f"Signing detection failed: {exc}")
+            if show_message:
+                messagebox.showerror(APP_TITLE, str(exc))
+
+    def _create_or_trust_local_signing_certificate(self) -> dict:
+        subject_dn = self._normalized_subject_dn(self.sign_local_subject_var.get())
+        subject_ps = subject_dn.replace("'", "''")
+        script = rf'''
+$subjectDn = '{subject_ps}'
+$minimumExpiry = (Get-Date).AddDays(30)
+$cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+    Where-Object {{ $_.Subject -eq $subjectDn -and $_.HasPrivateKey -and $_.NotAfter -gt $minimumExpiry }} |
+    Sort-Object NotAfter -Descending |
+    Select-Object -First 1
+$created = $false
+if (-not $cert) {{
+    $cert = New-SelfSignedCertificate `
+        -Type CodeSigningCert `
+        -Subject $subjectDn `
+        -CertStoreLocation 'Cert:\CurrentUser\My' `
+        -HashAlgorithm SHA256 `
+        -KeyAlgorithm RSA `
+        -KeyLength 3072 `
+        -KeyExportPolicy Exportable `
+        -NotAfter (Get-Date).AddYears(3)
+    $created = $true
+}}
+$root = Get-ChildItem Cert:\CurrentUser\Root | Where-Object {{ $_.Thumbprint -eq $cert.Thumbprint }} | Select-Object -First 1
+$trustedNow = $false
+if (-not $root) {{
+    $tmp = Join-Path $env:TEMP ('PyToExeBuilder-' + $cert.Thumbprint + '.cer')
+    try {{
+        Export-Certificate -Cert $cert -FilePath $tmp -Force | Out-Null
+        Import-Certificate -FilePath $tmp -CertStoreLocation 'Cert:\CurrentUser\Root' | Out-Null
+        $trustedNow = $true
+    }} finally {{
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }}
+}}
+$root = Get-ChildItem Cert:\CurrentUser\Root | Where-Object {{ $_.Thumbprint -eq $cert.Thumbprint }} | Select-Object -First 1
+[PSCustomObject]@{{
+    Subject       = $cert.Subject
+    Issuer        = $cert.Issuer
+    Thumbprint    = $cert.Thumbprint.ToUpperInvariant()
+    HasPrivateKey = [bool]$cert.HasPrivateKey
+    NotAfter      = $cert.NotAfter.ToString('o')
+    Created       = [bool]$created
+    Trusted       = [bool]($null -ne $root)
+    TrustedNow    = [bool]$trustedNow
+}} | ConvertTo-Json -Compress
+'''
+        output = self._run_powershell_text(script)
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if not lines:
+            raise RuntimeError("PowerShell did not return local certificate information.")
+        info = json.loads(lines[-1])
+        if not info.get("HasPrivateKey"):
+            raise RuntimeError("The local code-signing certificate was created without an accessible private key.")
+        if not info.get("Trusted"):
+            raise RuntimeError(
+                "The local self-signed certificate exists, but Windows did not add it to Current User Trusted Root."
+            )
+        thumb = self._normalize_thumbprint(str(info.get("Thumbprint", "")))
+        if len(thumb) != 40:
+            raise RuntimeError("Windows returned an invalid code-signing certificate thumbprint.")
+        self.sign_source_var.set("Windows Certificate Store (thumbprint)")
+        self.sign_thumbprint_var.set(thumb)
+        action = "Created and trusted" if info.get("Created") else ("Trusted existing" if info.get("TrustedNow") else "Reused trusted")
+        self.signing_status_var.set(f"{action} local certificate: {info.get('Subject')} · {thumb}")
+        self._log("\n=== LOCAL DEVELOPMENT SIGNING SETUP ===\n", "good")
+        self._log(f"{action}: {info.get('Subject')}\n", "good")
+        self._log(f"Thumbprint: {thumb}\n")
+        self._log("Trust scope: Current User Trusted Root (local/testing only; not public CA trust).\n", "warn")
+        return info
+
+    def _prepare_automatic_local_signing(self):
+        if not self.sign_auto_local_var.get() or not is_windows():
+            return
+        # "Automatic" means the recommended local defaults are applied together:
+        # Current User certificate store, deterministic thumbprint selection, and
+        # an RFC3161 SHA-256 timestamp requirement.
+        self.sign_machine_store_var.set(False)
+        if not self.timestamp_url_var.get().strip():
+            self.timestamp_url_var.set("http://timestamp.digicert.com")
+        self.sign_require_timestamp_var.set(True)
+        source = self.sign_source_var.get().strip() or "Windows Certificate Store (thumbprint)"
+        if source == "PFX / P12 file":
+            return
+
+        certs = self._query_code_signing_certificates()
+        wanted_subject = self._normalized_subject_dn(self.sign_local_subject_var.get()).casefold()
+        requested = self._normalize_thumbprint(self.sign_thumbprint_var.get())
+        exact = next(
+            (c for c in certs if self._normalize_thumbprint(str(c.get("Thumbprint", ""))) == requested),
+            None,
+        ) if requested else None
+        preferred_local = next(
+            (c for c in certs if str(c.get("Subject", "")).strip().casefold() == wanted_subject),
+            None,
+        )
+
+        if source == "Windows Certificate Store (thumbprint)":
+            if exact:
+                subject = str(exact.get("Subject", "")).strip().casefold()
+                # Only auto-install trust for the explicitly configured local self-signed
+                # identity. A third-party/public certificate is never promoted to a root.
+                if bool(exact.get("IsSelfSigned")) and subject == wanted_subject and not bool(exact.get("Trusted")):
+                    self._create_or_trust_local_signing_certificate()
+                return
+            if preferred_local:
+                if bool(preferred_local.get("IsSelfSigned")) and not bool(preferred_local.get("Trusted")):
+                    self._create_or_trust_local_signing_certificate()
+                else:
+                    self.sign_thumbprint_var.set(
+                        self._normalize_thumbprint(str(preferred_local.get("Thumbprint", "")))
+                    )
+                return
+            # The default thumbprint mode has no valid selection yet: create/reuse
+            # the configured local development identity rather than guessing among
+            # unrelated certificates.
+            self._create_or_trust_local_signing_certificate()
+            return
+
+        if source == "Windows Certificate Store (auto)" and certs:
+            # A usable certificate already exists. Let SignTool /a choose it unless
+            # there is a preferred local identity we can safely pin and/or repair.
+            if preferred_local:
+                if bool(preferred_local.get("IsSelfSigned")) and not bool(preferred_local.get("Trusted")):
+                    self._create_or_trust_local_signing_certificate()
+                else:
+                    self.sign_source_var.set("Windows Certificate Store (thumbprint)")
+                    self.sign_thumbprint_var.set(
+                        self._normalize_thumbprint(str(preferred_local.get("Thumbprint", "")))
+                    )
+            return
+
+        # No usable store certificate exists: provision the requested local
+        # development identity and pin it by thumbprint so selection is deterministic.
+        self._create_or_trust_local_signing_certificate()
+
     def _validate_signing_inputs(self):
         if not self.security_sign_var.get():
             return
         if not is_windows():
             raise ValueError("Authenticode signing requires Windows and Microsoft SignTool.")
 
-        source = self.sign_source_var.get().strip() or "PFX / P12 file"
+        # If requested, provision/reuse the local development identity before the
+        # expensive compiler/build work begins. This also repairs an existing
+        # self-signed certificate that is present in Personal but missing from
+        # Current User Trusted Root (the common /pa verification failure).
+        self._prepare_automatic_local_signing()
+
+        source = self.sign_source_var.get().strip() or "Windows Certificate Store (thumbprint)"
         valid_sources = {
             "PFX / P12 file",
             "Windows Certificate Store (auto)",
@@ -3789,27 +4135,20 @@ Get-CimInstance Win32_Process | ForEach-Object {
 
     def _resolve_signtool(self) -> Path:
         raw = self.signtool_var.get().strip()
-        if raw:
-            p = Path(raw).expanduser()
-            if p.is_file():
-                return p.resolve()
+        if raw and not Path(raw).expanduser().is_file():
             raise RuntimeError("Configured signtool.exe path does not exist.")
-        found = shutil.which("signtool.exe") or shutil.which("signtool")
+        found = self._find_signtool_quiet()
         if found:
-            return Path(found).resolve()
-        if is_windows():
-            kits = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Windows Kits" / "10" / "bin"
-            if kits.is_dir():
-                candidates = sorted(kits.glob("*/x64/signtool.exe"), reverse=True)
-                if candidates:
-                    return candidates[0].resolve()
+            if not raw:
+                self.signtool_var.set(str(found))
+            return found
         raise RuntimeError(
-            "Authenticode signing is enabled but signtool.exe was not found. Install the Windows SDK or select signtool.exe in Security."
+            "Authenticode signing is enabled but signtool.exe was not found. Install the Windows SDK or select signtool.exe in the Signing tab."
         )
 
     def _sign_executable(self, exe: Path):
         signtool = self._resolve_signtool()
-        source = self.sign_source_var.get().strip() or "PFX / P12 file"
+        source = self.sign_source_var.get().strip() or "Windows Certificate Store (thumbprint)"
         password = self.sign_password_var.get()
         cmd = [str(signtool), "sign", "/fd", "SHA256"]
 
@@ -3846,7 +4185,23 @@ Get-CimInstance Win32_Process | ForEach-Object {
         if timestamp:
             self._log(f"RFC3161 timestamp: {timestamp}\n")
         self._run_cmd(cmd, cwd=exe.parent, redact_values={password} if password else None)
-        self._run_cmd([str(signtool), "verify", "/pa", "/all", "/v", str(exe)], cwd=exe.parent)
+        verify_lines: list[str] = []
+        verify_rc = self._run_cmd(
+            [str(signtool), "verify", "/pa", "/all", "/v", str(exe)],
+            cwd=exe.parent,
+            check=False,
+            capture_lines=verify_lines,
+        )
+        if verify_rc != 0:
+            verify_text = "".join(verify_lines)
+            if "root certificate which is not trusted" in verify_text.lower():
+                raise RuntimeError(
+                    "The EXE was signed, but Windows does not trust the signing certificate chain. "
+                    "For a local self-signed certificate, enable 'Automatically create/reuse and trust a local self-signed Code Signing certificate' "
+                    "or import that certificate into Current User > Trusted Root Certification Authorities. "
+                    "A self-signed certificate remains local/testing trust only."
+                )
+            raise RuntimeError(f"Authenticode signature verification failed with exit code {verify_rc}.")
         self._log("Authenticode signing completed and Windows policy verification passed.\n", "good")
 
     def _write_security_artifacts(self, exe: Path, protection_backend: str):
@@ -3883,6 +4238,8 @@ Get-CimInstance Win32_Process | ForEach-Object {
                 f"Authenticode certificate source: {self.sign_source_var.get() if self.security_sign_var.get() else 'None'}",
                 f"RFC3161 timestamp required: {'Yes' if self.sign_require_timestamp_var.get() and self.security_sign_var.get() else 'No'}",
                 f"RFC3161 timestamp URL: {self.timestamp_url_var.get().strip() if self.security_sign_var.get() else 'None'}",
+                f"Automatic local self-signed signing setup: {'Enabled' if self.sign_auto_local_var.get() else 'Disabled'}",
+                f"Local self-signed publisher subject: {self._normalized_subject_dn(self.sign_local_subject_var.get())}",
                 f"Analysis notice bundled: {'Yes' if self.security_analysis_notice_var.get() else 'No'}",
                 f"Analysis notice mode: {self.security_analysis_notice_mode_var.get() if self.security_analysis_notice_var.get() else 'None'}",
                 f"Analysis notice filename: {self._safe_analysis_notice_name(self.security_analysis_notice_name_var.get()) if self.security_analysis_notice_var.get() else 'None'}",
@@ -4334,6 +4691,8 @@ Get-CimInstance Win32_Process | ForEach-Object {
             "sign_thumbprint": self.sign_thumbprint_var.get(),
             "sign_machine_store": self.sign_machine_store_var.get(),
             "sign_require_timestamp": self.sign_require_timestamp_var.get(),
+            "sign_auto_local": self.sign_auto_local_var.get(),
+            "sign_local_subject": self.sign_local_subject_var.get(),
             "security_analysis_notice": self.security_analysis_notice_var.get(),
             "security_analysis_notice_mode": self.security_analysis_notice_mode_var.get(),
             "security_analysis_notice_file": self.security_analysis_notice_file_var.get(),
@@ -4409,6 +4768,8 @@ Get-CimInstance Win32_Process | ForEach-Object {
             "sign_thumbprint": self.sign_thumbprint_var,
             "sign_machine_store": self.sign_machine_store_var,
             "sign_require_timestamp": self.sign_require_timestamp_var,
+            "sign_auto_local": self.sign_auto_local_var,
+            "sign_local_subject": self.sign_local_subject_var,
             "security_analysis_notice": self.security_analysis_notice_var,
             "security_analysis_notice_mode": self.security_analysis_notice_mode_var,
             "security_analysis_notice_file": self.security_analysis_notice_file_var,

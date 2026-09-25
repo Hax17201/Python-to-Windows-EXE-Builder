@@ -1,0 +1,18 @@
+Python to Windows EXE Builder v1.5.12
+
+- Added an Easy local development signing section to the Signing tab.
+- Added an automatic local signing checkbox, enabled by default for new settings.
+- Default local publisher subject: CN=Haxly Software.
+- Automatically detects usable Current User Code Signing certificates with private keys.
+- Automatically detects the x64 Windows SDK signtool.exe path when available.
+- If needed, creates a Current User self-signed Code Signing certificate using RSA-3072, SHA-256, an exportable private key and 3-year validity.
+- Reuses an existing matching local certificate instead of creating duplicates.
+- Automatically installs only the configured local self-signed identity into Current User Trusted Root for local/testing verification.
+- Automatically pins the selected local certificate by SHA-1 thumbprint while continuing to sign the EXE with SHA-256.
+- Applies the default DigiCert RFC3161 timestamp URL and keeps timestamping required when automatic local signing is used.
+- FIX: resolves the SignTool /pa verification failure: root certificate is not trusted by the trust provider, for the builder-managed local self-signed identity.
+- Improved SignTool verification errors so an untrusted-root failure explains how local trust differs from public CA trust.
+- Preserves an explicitly configured, existing PFX/P12 certificate instead of overriding it during auto-detection.
+- Does not promote arbitrary third-party certificates to Trusted Root.
+- Self-signed development signing remains local-only and does not create public SmartScreen publisher reputation.
+- Retains v1.5.11 independent Authenticode signing and v1.5.10 long-command fix.

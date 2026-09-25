@@ -1,0 +1,21 @@
+Python to Windows EXE Builder v1.5.12 - automatic local signing patch validation
+
+Static validation performed:
+- Python source compiles successfully with python -m py_compile.
+- Application version updated to 1.5.12.
+- Automatic local signing defaults to Current User certificate-store thumbprint mode.
+- RFC3161 timestamp default remains http://timestamp.digicert.com and timestamping is forced on when automatic local signing is used.
+- Certificate creation script matches the requested profile: CodeSigningCert, RSA 3072, SHA-256, exportable private key, 3-year validity.
+- Certificate reuse checks for the configured subject, accessible private key, and at least 30 days remaining validity.
+- Trust repair exports the exact selected local certificate to a temporary .cer file, imports it into Cert:\CurrentUser\Root, then deletes the temporary file.
+- Automatic root trust is restricted to the configured local self-signed identity; arbitrary third-party certificates are not promoted to Trusted Root.
+- Existing valid PFX/P12 configuration is preserved during auto-detection.
+- Existing local self-signed certificates can be reused and trusted without manual PowerShell steps.
+- SignTool x64 path auto-detection is retained and now populates the UI when found.
+- Final signing still uses SHA-256 and RFC3161 SHA-256 timestamping.
+- Final signature still uses SignTool verify /pa /all /v and remains fail-closed.
+- Verification now reports a specific explanation for untrusted-root failures.
+- PFX passwords remain runtime-only and are not persisted.
+
+Windows execution note:
+This environment is not Windows, so the PowerShell certificate-store mutation and real SignTool operation cannot be executed here. The supplied logic is designed specifically for Windows 10/11 PowerShell and Current User certificate stores. The user's v1.5.11 log already confirmed that their SignTool path, thumbprint signing and DigiCert RFC3161 timestamping work; v1.5.12 automates the missing Current User Trusted Root step that caused /pa verification to fail.

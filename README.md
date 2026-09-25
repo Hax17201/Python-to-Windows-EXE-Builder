@@ -2,7 +2,7 @@ Python to Windows EXE Builder
 
 A Windows GUI for turning Python scripts and full Python projects into Windows executable files using PyInstaller or Nuitka.
 
-Version 1.5.11 adds release-grade Authenticode signing that works for ordinary PyInstaller builds as well as protected builds. It supports PFX/P12 files and Windows Certificate Store identities, requires/verifies RFC3161 timestamping by default, and fails the release if signing verification fails. It also retains the v1.5.10 Windows long-command fix.
+Version 1.5.12 adds an easy local-development signing workflow on top of the v1.5.11 Authenticode release signer. When enabled, the builder can automatically detect or create a Current User self-signed Code Signing certificate, trust that exact local identity for the current Windows user, pin it by thumbprint, apply the DigiCert RFC3161 timestamp default, and repair the common SignTool /pa "root certificate is not trusted" verification failure. Public releases still require a publicly trusted code-signing identity.
 
 Features
 
@@ -58,29 +58,43 @@ Optional PyArmor + PyInstaller backend
 
 Optional release Authenticode signing (PFX/P12 or Windows Certificate Store)
 
+Automatic local self-signed development certificate creation/reuse/trust and thumbprint detection
+
 SHA-256 integrity output and build verification
 
 Sensitive-secret/private-key preflight for protected builds
 
 Optional expiry/device-binding controls when supported by the selected security backend
 
-What's New in v1.5.11
+What's New in v1.5.12
 
-Release Authenticode Signing Fix
+Automatic Local Development Signing
 
-Previously, Authenticode signing was coupled to anti-decompile security hardening, so a normal PyInstaller build could remain unsigned even when signing was selected. v1.5.11 makes signing independent and runs it after every successful final EXE build when enabled.
+The Signing tab now includes an easy local-development option. When the release-signing checkbox is enabled and automatic local signing is enabled, the builder can:
 
-Signing sources:
+Detect an existing valid Current User Code Signing certificate and private key.
 
-PFX / P12 certificate file
+Prefer/reuse the configured local publisher identity (default: Haxly Software).
 
-Windows Certificate Store automatic selection
+Create a self-signed Code Signing certificate only when no usable selected/local identity exists, using RSA-3072, SHA-256 and a 3-year validity period.
 
-Windows Certificate Store selection by certificate thumbprint
+Install that exact self-signed certificate into Current User Trusted Root so SignTool verify /pa can validate it on the same Windows account.
 
-The builder uses SHA-256 file digests, RFC3161 timestamps, and SignTool verification. The default timestamp URL is DigiCert's public RFC3161 endpoint and can be changed to the service supplied by your certificate authority.
+Automatically select the certificate by its SHA-1 thumbprint while continuing to sign the EXE and timestamp with SHA-256.
 
-A publicly trusted code-signing certificate is still required for public distribution; the builder cannot create publisher reputation with a self-signed certificate.
+Apply the default RFC3161 timestamp URL http://timestamp.digicert.com and keep timestamping required.
+
+Auto-detect the x64 Windows SDK signtool.exe path when available.
+
+The builder does not add arbitrary third-party certificates to Trusted Root. Automatic trust repair is limited to the configured local self-signed publisher identity.
+
+This fixes the common development-signing sequence where SignTool reports that the EXE was successfully signed but verification fails with: "A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider."
+
+The local self-signed workflow is for development/testing or managed internal environments only. It does not make the publisher publicly trusted on other PCs and does not create public SmartScreen reputation.
+
+Retained from v1.5.11 — Independent Authenticode Release Signing
+
+v1.5.11 separated Authenticode signing from anti-decompile/security hardening, so an ordinary PyInstaller build can still be signed. PFX/P12, Windows Certificate Store auto-selection, and exact certificate thumbprint selection remain available.
 
 Retained from v1.5.10 — Windows Long Command Fix
 
@@ -274,11 +288,11 @@ No client-side executable can be made completely impossible to reverse engineer.
 
 How to Enable Authenticode Release Signing
 
-Open the Signing tab.
+Open the Signing tab and enable: Sign the final EXE after every successful build.
 
-Enable: Sign the final EXE after every successful build.
+For the easiest local/testing setup, leave Automatically create/reuse and trust a local self-signed Code Signing certificate enabled. The default local publisher name is Haxly Software. On a signed build, the builder will detect/reuse the matching Current User certificate or create one if necessary, add that self-signed identity to Current User Trusted Root, pin the certificate thumbprint, and use the default DigiCert RFC3161 timestamp service. No manual PowerShell certificate commands are required.
 
-Choose one certificate source:
+For a real public certificate, disable automatic local self-signed signing if you do not want that fallback and choose one certificate source:
 
 PFX / P12 file — select your certificate file and enter its password for the current session.
 
@@ -286,11 +300,11 @@ Windows Certificate Store (auto) — lets SignTool automatically choose a usable
 
 Windows Certificate Store (thumbprint) — enter the 40-hex-character certificate SHA-1 thumbprint when you want to select one exact certificate. This SHA-1 value is only the certificate identifier; the executable signature itself uses SHA-256.
 
-Leave Require timestamp enabled for public releases. The default RFC3161 service is http://timestamp.digicert.com, or replace it with the timestamp endpoint supplied by your certificate authority.
+Leave Require timestamp enabled. The default RFC3161 service is http://timestamp.digicert.com, or replace it with the timestamp endpoint supplied by your certificate authority.
 
 Build normally. After PyInstaller or Nuitka succeeds, the builder signs the final EXE and runs SignTool verification. If signing or verification fails, the build is treated as failed instead of silently distributing an unsigned release.
 
-The PFX password is not saved to the builder settings file.
+The PFX password is not saved to the builder settings file. A self-signed certificate trusted by this automated workflow is trusted only by the local/current Windows user account; other computers will not automatically trust it.
 
 14. Build the EXE
 
@@ -401,5 +415,13 @@ Minimal reproduction steps when possible
 
 Do not include passwords, private keys, API secrets, access tokens or other sensitive information in public issues.
 
-Python to Windows EXE Builder v1.5.11
+License
+
+Choose the repository license that matches how you want others to use the project.
+
+If you want a permissive open-source project that allows reuse and modification with attribution, the MIT License is a common choice.
+
+If you do not want to grant reuse or modification rights, do not add an open-source license until you have selected terms that match your intended distribution.
+
+Python to Windows EXE Builder v1.5.12
 Build Python applications for Windows with project detection, dependency handling, resource bundling, build diagnostics and optional security hardening.
