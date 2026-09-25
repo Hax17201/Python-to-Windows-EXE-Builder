@@ -401,13 +401,5 @@ Minimal reproduction steps when possible
 
 Do not include passwords, private keys, API secrets, access tokens or other sensitive information in public issues.
 
-License
-
-Choose the repository license that matches how you want others to use the project.
-
-If you want a permissive open-source project that allows reuse and modification with attribution, the MIT License is a common choice.
-
-If you do not want to grant reuse or modification rights, do not add an open-source license until you have selected terms that match your intended distribution.
-
 Python to Windows EXE Builder v1.5.11
 Build Python applications for Windows with project detection, dependency handling, resource bundling, build diagnostics and optional security hardening.
